@@ -1,371 +1,289 @@
-import { useState, ReactNode } from 'react';
-import {
-  dailyRevenue,
-  monthlyRevenue,
-  revenueByService,
-  bookingsBySource,
-  hourlyBookings,
-  therapistPerformance,
-  invoices,
-  appointments,
-} from '../data/mockData';
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  ComposedChart,
-  Line,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import { Download, IndianRupee, CalendarRange, Receipt, Repeat, Star } from 'lucide-react';
-import { PageIntro, Card, StatCard, Avatar } from '../components/ui';
+import { useMemo, useState } from 'react';
+import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Download, IndianRupee, Receipt, Wallet, Percent, TrendingUp } from 'lucide-react';
+import { useLookup, useStore } from '../store/store';
+import { initialTab } from '../lib/router';
+import { Card, CardHeader, PageIntro, Progress, StatCard, Tabs } from '../components/ui';
+import { AXIS, ChartTooltip, GRID, SERIES } from '../components/charts';
+import { invoiceTotals } from '../lib/billing';
+import { attendanceSummary } from '../lib/insights';
+import { addDays, diffDays, fmtDate, fmtDay, monthEnd, monthKey, monthStart, rangeDays, shiftMonth, stampDate, toMin, todayISO } from '../lib/dates';
+import { compactInr, downloadCsv, inr, num } from '../lib/format';
+import { isActiveAppt } from '../lib/scheduling';
 
-const inr = (n: number) => `₹${n.toLocaleString('en-IN')}`;
-const tooltipStyle = { borderRadius: 12, border: '1px solid rgba(0,0,0,0.06)', fontSize: 12, boxShadow: '0 6px 20px rgba(8,43,34,0.08)' };
-
-type Tab = 'overview' | 'revenue' | 'staff' | 'appointments';
-const tabs: { key: Tab; label: string }[] = [
-  { key: 'overview', label: 'Overview' },
-  { key: 'revenue', label: 'Revenue' },
-  { key: 'staff', label: 'Staff' },
-  { key: 'appointments', label: 'Appointments' },
-];
-
-function ChartCard({ title, subtitle, children, className = '' }: { title: string; subtitle?: string; children: ReactNode; className?: string }) {
-  return (
-    <Card className={`p-5 ${className}`}>
-      <div className="mb-4">
-        <h3 className="font-display text-base font-semibold text-ink">{title}</h3>
-        {subtitle && <p className="text-xs text-ink/45 mt-0.5">{subtitle}</p>}
-      </div>
-      {children}
-    </Card>
-  );
-}
-
-function Donut({ data, centerLabel, centerValue }: { data: { name: string; value: number; color: string }[]; centerLabel?: string; centerValue?: string }) {
-  const total = data.reduce((s, d) => s + d.value, 0);
-  return (
-    <div className="flex items-center gap-5">
-      <div className="relative w-[150px] h-[150px] shrink-0">
-        <ResponsiveContainer width="100%" height="100%">
-          <PieChart>
-            <Pie data={data} dataKey="value" innerRadius={50} outerRadius={72} paddingAngle={2} stroke="none">
-              {data.map((d) => (
-                <Cell key={d.name} fill={d.color} />
-              ))}
-            </Pie>
-            <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v}`, '']} />
-          </PieChart>
-        </ResponsiveContainer>
-        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-          <span className="font-display text-2xl font-semibold text-ink">{centerValue ?? total}</span>
-          {centerLabel && <span className="text-[10px] uppercase tracking-wider text-ink/40">{centerLabel}</span>}
-        </div>
-      </div>
-      <ul className="flex-1 space-y-2.5">
-        {data.map((d) => (
-          <li key={d.name} className="flex items-center gap-2.5 text-sm">
-            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: d.color }} />
-            <span className="text-ink/70 flex-1">{d.name}</span>
-            <span className="font-semibold text-ink">{d.value}</span>
-            <span className="text-xs text-ink/40 w-9 text-right">{Math.round((d.value / total) * 100)}%</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
+type Tab = 'sales' | 'staff' | 'inventory' | 'venue';
+type Preset = 'today' | 'yesterday' | '7d' | 'month' | 'lastmonth' | 'custom';
 
 export default function Reports() {
-  const [tab, setTab] = useState<Tab>('overview');
-  const [range, setRange] = useState('6M');
+  const { state } = useStore();
+  const L = useLookup();
+  const today = todayISO();
+  const [tab, setTab] = useState<Tab>(() => initialTab<Tab>(['sales', 'staff', 'inventory', 'venue'], 'sales'));
+  const [preset, setPreset] = useState<Preset>('7d');
+  const [cFrom, setCFrom] = useState(addDays(today, -13));
+  const [cTo, setCTo] = useState(today);
 
-  // Derived datasets
-  const paymentMix = (['Cash', 'Card', 'UPI'] as const).map((mode, i) => ({
-    name: mode,
-    value: invoices.filter((inv) => inv.paymentMode === mode).length,
-    color: ['#94a3b8', '#3b82f6', '#8b5cf6'][i],
-  }));
+  const [from, to] = useMemo((): [string, string] => {
+    switch (preset) {
+      case 'today': return [today, today];
+      case 'yesterday': return [addDays(today, -1), addDays(today, -1)];
+      case '7d': return [addDays(today, -6), today];
+      case 'month': return [monthStart(monthKey(today)), today];
+      case 'lastmonth': { const m = shiftMonth(monthKey(today), -1); return [monthStart(m), monthEnd(m)]; }
+      default: return [cFrom, cTo];
+    }
+  }, [preset, cFrom, cTo, today]);
 
-  const statusColors: Record<string, string> = {
-    confirmed: '#3b82f6',
-    'checked-in': '#f59e0b',
-    completed: '#10b981',
-    cancelled: '#ef4444',
-  };
-  const statusMix = Object.entries(
-    appointments.reduce<Record<string, number>>((acc, a) => {
-      acc[a.status] = (acc[a.status] || 0) + 1;
-      return acc;
-    }, {})
-  ).map(([name, value]) => ({ name, value, color: statusColors[name] || '#94a3b8' }));
+  const data = useMemo(() => {
+    const invs = state.invoices.filter((i) => i.status === 'Finalized' && i.date >= from && i.date <= to);
+    const totals = invs.map((i) => ({ i, t: invoiceTotals(state, i) }));
+    const sum = (f: (t: ReturnType<typeof invoiceTotals>) => number) => totals.reduce((s, x) => s + f(x.t), 0);
+    const payments = state.invoices.flatMap((i) => i.payments).filter((p) => { const d = stampDate(p.at); return d >= from && d <= to; });
+    const collections = payments.reduce((s, p) => s + p.amount, 0);
+    const byMode = state.settings.paymentModes.map((m) => ({ m, v: payments.filter((p) => p.mode === m).reduce((s, p) => s + p.amount, 0) }));
 
-  const totalRevenue = monthlyRevenue[monthlyRevenue.length - 1].revenue;
-  const prevRevenue = monthlyRevenue[monthlyRevenue.length - 2].revenue;
-  const revTrend = Math.round(((totalRevenue - prevRevenue) / prevRevenue) * 1000) / 10;
-  const totalAppointments = therapistPerformance.reduce((s, t) => s + t.services, 0);
-  const avgTicket = Math.round(totalRevenue / totalAppointments);
+    const svcMap = new Map<string, { count: number; revenue: number }>();
+    for (const { i } of totals) for (const l of i.lines) if (l.kind === 'service' && l.refId) {
+      const cur = svcMap.get(l.refId) ?? { count: 0, revenue: 0 };
+      cur.count += l.qty; cur.revenue += l.qty * l.unitPrice; svcMap.set(l.refId, cur);
+    }
+    const services = [...svcMap.entries()].map(([id, v]) => ({ s: L.services.get(id)!, ...v })).filter((x) => x.s).sort((a, b) => b.revenue - a.revenue);
+    const catMap = new Map<string, number>();
+    services.forEach((x) => catMap.set(x.s.category, (catMap.get(x.s.category) ?? 0) + x.revenue));
+    const categories = [...catMap.entries()].map(([cat, revenue]) => ({ cat, revenue })).sort((a, b) => b.revenue - a.revenue);
 
-  const kpis = [
-    { label: 'Revenue · May', value: inr(totalRevenue), icon: <IndianRupee size={20} />, trend: { value: `${revTrend}%`, up: revTrend >= 0 }, hint: 'vs April', accent: 'brand' as const },
-    { label: 'Appointments', value: totalAppointments, icon: <CalendarRange size={20} />, trend: { value: '12%', up: true }, hint: 'this month', accent: 'blue' as const },
-    { label: 'Avg Ticket', value: inr(avgTicket), icon: <Receipt size={20} />, trend: { value: '5%', up: true }, hint: 'incl. add-ons', accent: 'gold' as const },
-    { label: 'Repeat Rate', value: '68%', icon: <Repeat size={20} />, trend: { value: '4%', up: true }, hint: 'returning clients', accent: 'rose' as const },
-  ];
+    const days = rangeDays(from, to);
+    const daily = days.map((d) => ({
+      day: days.length > 10 ? String(Number(d.slice(8))) : fmtDay(d).split(',')[0] + ' ' + Number(d.slice(8)),
+      Sales: totals.filter((x) => x.i.date === d).reduce((s, x) => s + x.t.total, 0),
+    }));
+
+    // Staff
+    const staff = state.employees.filter((e) => e.active).map((e) => {
+      const done = state.appointments.filter((a) => a.employeeId === e.id && a.status === 'Completed' && a.date >= from && a.date <= to);
+      const revenue = done.reduce((s, a) => {
+        const inv = a.invoiceId ? L.invoices.get(a.invoiceId) : undefined;
+        const line = inv?.lines.find((l) => l.appointmentId === a.id);
+        return s + (line ? line.qty * line.unitPrice : 0);
+      }, 0);
+      return { e, att: attendanceSummary(state, e.id, from, to), done: done.length, revenue };
+    });
+    const act = state.activity.filter((a) => { const d = stampDate(a.at); return d >= from && d <= to; });
+    const reception = [...new Set(act.map((a) => a.userName))].map((name) => {
+      const mine = act.filter((a) => a.userName === name);
+      return {
+        name,
+        role: mine[0].role,
+        created: mine.filter((a) => a.entity === 'Appointment' && a.action === 'created').length,
+        edited: mine.filter((a) => a.entity === 'Appointment' && ['rescheduled', 'updated', 'reassigned'].includes(a.action)).length,
+        cancelled: mine.filter((a) => a.action === 'cancelled').length,
+        invoices: mine.filter((a) => a.action === 'finalized').length,
+        customers: mine.filter((a) => a.entity === 'Customer' && a.action === 'created').length,
+      };
+    });
+
+    // Inventory
+    const mv = state.movements.filter((m) => m.date >= from && m.date <= to);
+    const consumption = state.inventory.filter((i) => i.usage === 'Consumable').map((i) => {
+      const qty = mv.filter((m) => m.itemId === i.id && m.type === 'Consumed').reduce((s, m) => s + m.qty, 0);
+      return { i, qty, cost: qty * i.costPerUnit, services: new Set(mv.filter((m) => m.itemId === i.id && m.type === 'Consumed').map((m) => m.appointmentId)).size };
+    }).filter((x) => x.qty > 0).sort((a, b) => b.cost - a.cost);
+    const retail = state.inventory.filter((i) => i.usage === 'Retail').map((i) => {
+      const qty = mv.filter((m) => m.itemId === i.id && m.type === 'Sold').reduce((s, m) => s + m.qty, 0);
+      return { i, qty, revenue: qty * (i.retailPrice ?? 0) };
+    }).sort((a, b) => b.revenue - a.revenue);
+
+    // Venue
+    const nDays = days.length;
+    const hoursOpen = (toMin(state.settings.closeTime) - toMin(state.settings.openTime)) / 60;
+    const rooms = state.rooms.filter((r) => r.active).map((r) => {
+      const appts = state.appointments.filter((a) => a.roomId === r.id && a.date >= from && a.date <= to && isActiveAppt(a));
+      const hours = appts.reduce((s, a) => s + a.durationMin / 60, 0);
+      const capacity = hoursOpen * nDays * r.stations;
+      return { r, count: appts.length, hours, util: capacity ? Math.min(100, (hours / capacity) * 100) : 0 };
+    });
+
+    return { invs, sum, collections, byMode, services, categories, daily, staff, reception, consumption, retail, rooms };
+  }, [state, L, from, to]);
+
+  const gross = data.sum((t) => t.subtotal);
+  const disc = data.sum((t) => t.discountTotal);
+  const net = data.sum((t) => t.total);
+  const gst = data.sum((t) => t.gst);
+  const svcRev = data.sum((t) => t.serviceSubtotal);
+  const prodRev = data.sum((t) => t.productSubtotal);
+  const memRev = data.sum((t) => t.otherSubtotal);
+  const maxCat = Math.max(1, ...data.categories.map((c) => c.revenue));
 
   return (
-    <div className="space-y-6">
+    <div>
       <PageIntro
-        eyebrow="Business"
-        title="Reports & Sales"
-        subtitle="A clear read on revenue, demand and team performance."
-        actions={
-          <div className="flex items-center gap-3">
-            <div className="inline-flex rounded-xl bg-white border border-black/[0.08] p-1">
-              {['7D', '30D', '6M'].map((r) => (
-                <button
-                  key={r}
-                  onClick={() => setRange(r)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                    range === r ? 'bg-forest-800 text-white' : 'text-ink/55 hover:text-ink'
-                  }`}
-                >
-                  {r}
-                </button>
-              ))}
-            </div>
-            <button className="btn-ghost">
-              <Download size={16} /> Export
-            </button>
-          </div>
-        }
+        eyebrow="Insights"
+        title="Reports"
+        subtitle="Daily and date-filtered sales with service-wise breakdown, staff attendance and service activity, inventory consumption and retail sales."
+        feature="J"
       />
 
-      {/* KPIs */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {kpis.map((k) => (
-          <StatCard key={k.label} {...k} />
+      <div className="card p-3 mb-4 flex flex-wrap items-center gap-2">
+        {([['today', 'Today'], ['yesterday', 'Yesterday'], ['7d', 'Last 7 days'], ['month', 'This month'], ['lastmonth', 'Last month'], ['custom', 'Custom']] as [Preset, string][]).map(([k, l]) => (
+          <button key={k} className={`chip ${preset === k ? 'chip-on' : 'chip-off'}`} onClick={() => setPreset(k)}>{l}</button>
         ))}
+        {preset === 'custom' && (
+          <span className="flex items-center gap-2 text-sm">
+            <input type="date" className="field !py-1.5 !w-auto" value={cFrom} onChange={(e) => setCFrom(e.target.value)} />
+            to
+            <input type="date" className="field !py-1.5 !w-auto" value={cTo} max={today} onChange={(e) => setCTo(e.target.value)} />
+          </span>
+        )}
+        <span className="ml-auto text-sm text-ink/55">{fmtDate(from)}{from !== to && ` – ${fmtDate(to)}`} · {diffDays(to, from) + 1} day{from !== to ? 's' : ''}</span>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 border-b border-black/[0.07]">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`relative px-4 py-2.5 text-sm font-medium transition-colors ${
-              tab === t.key ? 'text-brand' : 'text-ink/50 hover:text-ink'
-            }`}
-          >
-            {t.label}
-            {tab === t.key && <span className="absolute left-3 right-3 -bottom-px h-0.5 rounded-full bg-brand" />}
-          </button>
-        ))}
-      </div>
+      <Tabs<Tab> value={tab} onChange={setTab} tabs={[{ key: 'sales', label: 'Sales' }, { key: 'staff', label: 'Staff & reception' }, { key: 'inventory', label: 'Inventory & retail' }, { key: 'venue', label: 'Venue utilisation' }]} />
 
-      {/* ------------------------------ Overview ------------------------------ */}
-      {tab === 'overview' && (
-        <div className="space-y-5">
-          <div className="grid lg:grid-cols-3 gap-5">
-            <ChartCard title="Revenue trend" subtitle="Monthly revenue vs target" className="lg:col-span-2">
-              <div className="h-[280px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={monthlyRevenue} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="revArea" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor="#0F6E56" stopOpacity={0.25} />
-                        <stop offset="100%" stopColor="#0F6E56" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#eceae3" vertical={false} />
-                    <XAxis dataKey="month" tick={{ fill: '#8a938d', fontSize: 12 }} axisLine={false} tickLine={false} />
-                    <YAxis tick={{ fill: '#8a938d', fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 100000).toFixed(1)}L`} />
-                    <Tooltip contentStyle={tooltipStyle} formatter={(v) => [inr(Number(v)), 'Revenue']} />
-                    <Area type="monotone" dataKey="revenue" stroke="#0F6E56" strokeWidth={2.5} fill="url(#revArea)" />
-                    <Line type="monotone" dataKey="target" stroke="#C9A86A" strokeWidth={2} strokeDasharray="5 4" dot={false} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="flex items-center gap-5 mt-2 text-xs text-ink/55">
-                <span className="flex items-center gap-1.5"><span className="w-3 h-1 rounded bg-brand" /> Revenue</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 rounded bg-gold" /> Target</span>
-              </div>
-            </ChartCard>
-
-            <ChartCard title="Payment mix" subtitle="How clients are paying">
-              <Donut data={paymentMix} centerLabel="invoices" />
-            </ChartCard>
+      {tab === 'sales' && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3.5">
+            <StatCard label="Total invoiced" value={compactInr(net)} accent="gold" icon={<IndianRupee size={18} />} hint={`${data.invs.length} invoices`} />
+            <StatCard label="Collections" value={compactInr(data.collections)} icon={<Wallet size={18} />} />
+            <StatCard label="Discounts given" value={compactInr(disc)} accent="rose" icon={<Percent size={18} />} hint={`${gross ? Math.round((disc / gross) * 100) : 0}% of gross`} />
+            <StatCard label="GST collected" value={compactInr(gst)} accent="blue" icon={<Receipt size={18} />} hint="Sample 18%" />
+            <StatCard label="Average bill" value={inr(data.invs.length ? net / data.invs.length : 0)} accent="purple" icon={<TrendingUp size={18} />} />
           </div>
 
-          <div className="grid lg:grid-cols-2 gap-5">
-            <ChartCard title="Top services by revenue" subtitle="Your highest earners">
-              <div className="h-[260px]">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={revenueByService} layout="vertical" margin={{ top: 0, right: 16, left: 8, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#eceae3" horizontal={false} />
-                    <XAxis type="number" tick={{ fill: '#8a938d', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
-                    <YAxis type="category" dataKey="service" tick={{ fill: '#5b6560', fontSize: 11 }} axisLine={false} tickLine={false} width={104} />
-                    <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'rgba(15,110,86,0.05)' }} formatter={(v) => [inr(Number(v)), 'Revenue']} />
-                    <Bar dataKey="revenue" radius={[0, 6, 6, 0]} maxBarSize={20}>
-                      {revenueByService.map((_, i) => (
-                        <Cell key={i} fill={i === 0 ? '#C9A86A' : '#0F6E56'} />
-                      ))}
-                    </Bar>
+          <div className="grid lg:grid-cols-[1.4fr_1fr] gap-4">
+            <Card>
+              <CardHeader title="Daily sales" subtitle="Finalized invoice totals incl. GST" />
+              <div className="h-[250px] px-2 pb-3">
+                <ResponsiveContainer width="100%" height="100%" initialDimension={{ width: 560, height: 240 }}>
+                  <BarChart data={data.daily} barCategoryGap="22%">
+                    <CartesianGrid {...GRID} />
+                    <XAxis dataKey="day" {...AXIS} interval="preserveStartEnd" />
+                    <YAxis {...AXIS} width={48} tickFormatter={(v) => compactInr(Number(v))} />
+                    <Tooltip cursor={{ fill: 'rgba(31,42,36,0.04)' }} content={<ChartTooltip format={(v) => inr(v)} />} />
+                    <Bar dataKey="Sales" fill={SERIES[0]} radius={[4, 4, 0, 0]} maxBarSize={28} />
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            </ChartCard>
+            </Card>
+            <Card>
+              <CardHeader title="Revenue by category" subtitle="Service line value before discounts" />
+              <ul className="px-5 pb-4 space-y-2.5">
+                {data.categories.map((c) => (
+                  <li key={c.cat}>
+                    <div className="flex justify-between text-[13px] mb-1"><span className="text-ink/75">{c.cat}</span><span className="font-semibold text-ink">{inr(c.revenue)}</span></div>
+                    <Progress value={(c.revenue / maxCat) * 100} />
+                  </li>
+                ))}
+                {data.categories.length === 0 && <li className="text-sm text-ink/45">No sales in range.</li>}
+              </ul>
+              <div className="grid grid-cols-3 gap-2 px-5 pb-5 pt-1 border-t border-black/[0.05]">
+                {[['Services', svcRev], ['Retail', prodRev], ['Memberships', memRev]].map(([k, v]) => (
+                  <div key={k as string}><p className="text-[11px] text-ink/45">{k}</p><p className="text-sm font-semibold">{inr(v as number)}</p></div>
+                ))}
+              </div>
+            </Card>
+          </div>
 
-            <ChartCard title="Where bookings come from" subtitle="Channel mix this month">
-              <Donut data={bookingsBySource.map((b) => ({ name: b.source, value: b.value, color: b.color }))} centerLabel="bookings" />
-            </ChartCard>
+          <div className="grid lg:grid-cols-[1.6fr_1fr] gap-4">
+            <ReportTable
+              title="Service-wise breakdown"
+              csv="oasis-service-sales"
+              head={['Service', 'Category', 'Count', 'Revenue', 'Avg']}
+              rows={data.services.map((x) => [x.s.name, x.s.category, x.count, x.revenue, Math.round(x.revenue / x.count)])}
+              money={[3, 4]}
+            />
+            <ReportTable title="Collections by payment mode" csv="oasis-payment-modes" head={['Mode', 'Amount', 'Share']} rows={data.byMode.map((m) => [m.m, m.v, `${data.collections ? Math.round((m.v / data.collections) * 100) : 0}%`])} money={[1]} />
           </div>
         </div>
       )}
 
-      {/* ------------------------------ Revenue ------------------------------- */}
-      {tab === 'revenue' && (
-        <div className="space-y-5">
-          <div className="grid lg:grid-cols-3 gap-4">
-            <div className="card p-5">
-              <p className="text-xs text-ink/50">Total (6 months)</p>
-              <p className="font-display text-2xl font-semibold text-ink mt-1">{inr(monthlyRevenue.reduce((s, m) => s + m.revenue, 0))}</p>
-            </div>
-            <div className="card p-5">
-              <p className="text-xs text-ink/50">Best month</p>
-              <p className="font-display text-2xl font-semibold text-ink mt-1">May · {inr(totalRevenue)}</p>
-            </div>
-            <div className="card p-5 ring-1 ring-brand/20">
-              <p className="text-xs text-brand">This week</p>
-              <p className="font-display text-2xl font-semibold text-ink mt-1">{inr(dailyRevenue.reduce((s, d) => s + d.revenue, 0))}</p>
-            </div>
-          </div>
-
-          <ChartCard title="Daily revenue" subtitle="Past 7 days">
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={dailyRevenue} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#eceae3" vertical={false} />
-                  <XAxis dataKey="day" tick={{ fill: '#8a938d', fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: '#8a938d', fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
-                  <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'rgba(15,110,86,0.05)' }} formatter={(v) => [inr(Number(v)), 'Revenue']} />
-                  <Bar dataKey="revenue" radius={[6, 6, 0, 0]} maxBarSize={44} fill="#0F6E56" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </ChartCard>
-
-          <ChartCard title="Revenue by service" subtitle="Contribution to the top line">
-            <div className="h-[260px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={revenueByService} layout="vertical" margin={{ top: 0, right: 16, left: 8, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#eceae3" horizontal={false} />
-                  <XAxis type="number" tick={{ fill: '#8a938d', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
-                  <YAxis type="category" dataKey="service" tick={{ fill: '#5b6560', fontSize: 11 }} axisLine={false} tickLine={false} width={104} />
-                  <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'rgba(15,110,86,0.05)' }} formatter={(v) => [inr(Number(v)), 'Revenue']} />
-                  <Bar dataKey="revenue" radius={[0, 6, 6, 0]} maxBarSize={20} fill="#0F6E56" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </ChartCard>
-        </div>
-      )}
-
-      {/* -------------------------------- Staff ------------------------------- */}
       {tab === 'staff' && (
-        <div className="space-y-5">
-          <ChartCard title="Revenue by therapist" subtitle="Who is driving the business">
-            <div className="h-[260px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={therapistPerformance} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#eceae3" vertical={false} />
-                  <XAxis dataKey="name" tick={{ fill: '#5b6560', fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(v) => v.split(' ')[0]} />
-                  <YAxis tick={{ fill: '#8a938d', fontSize: 12 }} axisLine={false} tickLine={false} tickFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`} />
-                  <Tooltip contentStyle={tooltipStyle} cursor={{ fill: 'rgba(15,110,86,0.05)' }} formatter={(v) => [inr(Number(v)), 'Revenue']} />
-                  <Bar dataKey="revenue" radius={[6, 6, 0, 0]} maxBarSize={64}>
-                    {therapistPerformance.map((_, i) => (
-                      <Cell key={i} fill={i === 0 ? '#C9A86A' : '#0F6E56'} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </ChartCard>
-
-          <Card className="p-5">
-            <h3 className="font-display text-base font-semibold text-ink mb-4">Performance details</h3>
-            <div className="space-y-4">
-              {therapistPerformance.map((t) => (
-                <div key={t.name} className="flex items-center gap-4">
-                  <Avatar name={t.name} size={40} />
-                  <div className="w-36 shrink-0">
-                    <p className="text-sm font-semibold text-ink">{t.name}</p>
-                    <p className="text-xs text-ink/45 flex items-center gap-1">
-                      <Star size={11} className="text-gold fill-gold" /> {t.rating} · {t.services} services
-                    </p>
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex justify-between text-xs text-ink/50 mb-1">
-                      <span>Utilization</span>
-                      <span className="font-semibold text-ink/70">{t.utilization}%</span>
-                    </div>
-                    <div className="h-2 rounded-full bg-black/[0.06] overflow-hidden">
-                      <div className="h-full rounded-full bg-brand" style={{ width: `${t.utilization}%` }} />
-                    </div>
-                  </div>
-                  <div className="w-24 text-right">
-                    <p className="font-display text-base font-semibold text-ink">{inr(t.revenue)}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
+        <div className="space-y-4">
+          <ReportTable
+            title="Employee attendance & service activity"
+            csv="oasis-staff-summary"
+            head={['Employee', 'Present', 'Late', 'Absent', 'Leave', 'Hours', 'Services done', 'Service revenue']}
+            rows={data.staff.map((s) => [s.e.name, s.att.present + s.att.late, s.att.late, s.att.absent, s.att.leave, s.att.hours, s.done, s.revenue])}
+            money={[7]}
+          />
+          <ReportTable
+            title="Receptionist & user activity"
+            subtitle="From the activity log — who created and edited bookings"
+            csv="oasis-user-activity"
+            head={['User', 'Role', 'Bookings created', 'Bookings edited', 'Cancellations', 'Invoices finalized', 'Customers registered']}
+            rows={data.reception.map((r) => [r.name, r.role, r.created, r.edited, r.cancelled, r.invoices, r.customers])}
+          />
         </div>
       )}
 
-      {/* ---------------------------- Appointments ---------------------------- */}
-      {tab === 'appointments' && (
-        <div className="space-y-5">
-          <div className="grid lg:grid-cols-2 gap-5">
-            <ChartCard title="Booking status" subtitle="Today's appointment outcomes">
-              <Donut data={statusMix} centerLabel="today" />
-            </ChartCard>
-            <ChartCard title="Booking sources" subtitle="Online & walk-in split">
-              <Donut data={bookingsBySource.map((b) => ({ name: b.source, value: b.value, color: b.color }))} centerLabel="bookings" />
-            </ChartCard>
-          </div>
-
-          <ChartCard title="Busiest hours" subtitle="When clients book through the day">
-            <div className="h-[280px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={hourlyBookings} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="hourArea" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#C9A86A" stopOpacity={0.35} />
-                      <stop offset="100%" stopColor="#C9A86A" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#eceae3" vertical={false} />
-                  <XAxis dataKey="hour" tick={{ fill: '#8a938d', fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: '#8a938d', fontSize: 12 }} axisLine={false} tickLine={false} allowDecimals={false} />
-                  <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} bookings`, '']} />
-                  <Area type="monotone" dataKey="bookings" stroke="#C9A86A" strokeWidth={2.5} fill="url(#hourArea)" />
-                </AreaChart>
-              </ResponsiveContainer>
-            </div>
-          </ChartCard>
+      {tab === 'inventory' && (
+        <div className="grid lg:grid-cols-2 gap-4">
+          <ReportTable
+            title="Inventory consumption"
+            subtitle="Manually recorded usage against services"
+            csv="oasis-consumption"
+            head={['Item', 'Used', 'Services', 'Est. cost']}
+            rows={data.consumption.map((c) => [c.i.name, `${num(Math.round(c.qty))} ${c.i.unit}`, c.services, Math.round(c.cost)])}
+            money={[3]}
+          />
+          <ReportTable
+            title="Retail sales"
+            csv="oasis-retail"
+            head={['Product', 'Units', 'Revenue']}
+            rows={data.retail.map((r) => [r.i.name, r.qty, r.revenue])}
+            money={[2]}
+          />
         </div>
+      )}
+
+      {tab === 'venue' && (
+        <Card className="p-5">
+          <p className="font-display text-lg font-semibold">Room utilisation</p>
+          <p className="text-xs text-ink/45 mb-4">Booked hours ÷ (opening hours × days × stations). Resource-level allocation for banquets is a planned capability.</p>
+          <div className="space-y-3">
+            {data.rooms.map((r) => (
+              <div key={r.r.id} className="grid grid-cols-[180px_1fr_120px] items-center gap-4">
+                <div><p className="text-sm font-semibold text-ink">{r.r.name}</p><p className="text-[11px] text-ink/45">{r.r.stations > 1 ? `${r.r.stations} stations` : 'Exclusive'}</p></div>
+                <Progress value={r.util} tone={r.util > 60 ? 'bg-brand' : r.util > 30 ? 'bg-amber-500' : 'bg-gray-400'} />
+                <p className="text-sm text-right"><b>{Math.round(r.util)}%</b> <span className="text-ink/45">· {r.count} bookings · {Math.round(r.hours)} h</span></p>
+              </div>
+            ))}
+          </div>
+        </Card>
       )}
     </div>
+  );
+}
+
+function ReportTable({ title, subtitle, head, rows, money = [], csv }: { title: string; subtitle?: string; head: string[]; rows: (string | number)[][]; money?: number[]; csv: string }) {
+  return (
+    <Card>
+      <CardHeader
+        title={title}
+        subtitle={subtitle}
+        action={<button className="btn-ghost btn-sm" onClick={() => downloadCsv(`${csv}.csv`, [head, ...rows])}><Download size={13} /> CSV</button>}
+      />
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="bg-sand/50 border-y border-black/[0.06]">
+              {head.map((h, i) => <th key={h} className={`th ${i > 0 && typeof rows[0]?.[i] === 'number' ? 'text-right' : ''}`}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-black/[0.05]">
+            {rows.map((r, ri) => (
+              <tr key={ri}>
+                {r.map((c, ci) => (
+                  <td key={ci} className={`td ${ci === 0 ? 'font-semibold text-ink' : ''} ${typeof c === 'number' && ci > 0 ? 'text-right' : ''}`}>
+                    {typeof c === 'number' ? (money.includes(ci) ? inr(c) : num(c)) : c}
+                  </td>
+                ))}
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={head.length} className="px-4 py-8 text-center text-sm text-ink/40">No data in this range.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </Card>
   );
 }

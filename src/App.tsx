@@ -1,74 +1,76 @@
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { RoleProvider } from './contexts/RoleContext';
+import { useEffect } from 'react';
+import { AuthProvider, useAuth } from './store/auth';
+import { StoreProvider } from './store/store';
+import { UIProvider } from './components/Overlays';
 import Layout from './components/Layout';
+import { HOME_PAGE, PageKey, PAGE_ACCESS } from './config/venue';
+import { navigate, useRoute } from './lib/router';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import Appointments from './pages/Appointments';
+import DemoGuide from './pages/DemoGuide';
+import Reception from './pages/Reception';
+import CalendarPage from './pages/Calendar';
+import ServiceDesk from './pages/ServiceDesk';
 import Customers from './pages/Customers';
-import Staff from './pages/Staff';
-import Attendance from './pages/Attendance';
-import LeaveRequests from './pages/LeaveRequests';
-import Inventory from './pages/Inventory';
-import BillingInvoices from './pages/BillingInvoices';
-import Payroll from './pages/Payroll';
-import Commission from './pages/Commission';
-import Reports from './pages/Reports';
-import Settings from './pages/Settings';
+import CustomerProfile from './pages/CustomerProfile';
+import Leads from './pages/Leads';
+import Billing from './pages/Billing';
+import Checkout from './pages/Checkout';
+import Memberships from './pages/Memberships';
 import WhatsApp from './pages/WhatsApp';
+import Inventory from './pages/Inventory';
+import Staff from './pages/Staff';
+import VenueSetup from './pages/VenueSetup';
+import Reports from './pages/Reports';
+import ActivityLog from './pages/ActivityLog';
+import Settings from './pages/Settings';
 
-function AppShell() {
-  const { user } = useAuth();
+function Shell() {
+  const { user, can } = useAuth();
+  const route = useRoute();
+  const page = route.page as PageKey;
+  const allowed = !!user && !!page && page in PAGE_ACCESS && can(page);
 
-  if (!user) {
-    return <Login />;
-  }
+  useEffect(() => {
+    if (user && !allowed) navigate(HOME_PAGE[user.role]);
+  }, [user, allowed]);
 
-  return (
-    <Layout>
-      {(page) => {
-        switch (page) {
-          case 'Dashboard':
-            return <Dashboard />;
-          case 'Appointments':
-            return <Appointments />;
-          case 'Customers':
-            return <Customers />;
-          case 'Staff':
-            return <Staff />;
-          case 'Attendance':
-            return <Attendance />;
-          case 'Leave Requests':
-            return <LeaveRequests />;
-          case 'Inventory':
-            return <Inventory />;
-          case 'Billing & Invoices':
-            return <BillingInvoices />;
-          case 'WhatsApp':
-            return <WhatsApp />;
-          case 'Payroll':
-            return <Payroll />;
-          case 'Commission':
-            return <Commission />;
-          case 'Reports':
-            return <Reports />;
-          case 'Settings':
-            return <Settings />;
-          default:
-            return <Dashboard />;
-        }
-      }}
-    </Layout>
-  );
+  if (!user) return <Login />;
+  if (!allowed) return null;
+
+  const content = (() => {
+    switch (page) {
+      case 'dashboard': return <Dashboard />;
+      case 'guide': return <DemoGuide />;
+      case 'reception': return <Reception />;
+      case 'calendar': return <CalendarPage />;
+      case 'service-desk': return <ServiceDesk />;
+      case 'customers': return route.id ? <CustomerProfile id={route.id} /> : <Customers />;
+      case 'leads': return <Leads openId={route.query.get('open') ?? undefined} />;
+      case 'billing': return route.id ? <Checkout id={route.id} /> : <Billing />;
+      case 'memberships': return <Memberships />;
+      case 'whatsapp': return <WhatsApp />;
+      case 'inventory': return <Inventory />;
+      case 'staff': return <Staff />;
+      case 'venue': return <VenueSetup />;
+      case 'reports': return <Reports />;
+      case 'activity': return <ActivityLog />;
+      case 'settings': return <Settings />;
+      default: return null;
+    }
+  })();
+
+  return <Layout page={page}>{content}</Layout>;
 }
 
-function App() {
+export default function App() {
   return (
     <AuthProvider>
-      <RoleProvider>
-        <AppShell />
-      </RoleProvider>
+      <StoreProvider>
+        <UIProvider>
+          <Shell />
+        </UIProvider>
+      </StoreProvider>
     </AuthProvider>
   );
 }
-
-export default App;

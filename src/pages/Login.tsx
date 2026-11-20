@@ -1,147 +1,103 @@
-import { useState } from 'react';
-import { useAuth, demoUsers } from '../contexts/AuthContext';
-import { useRole } from '../contexts/RoleContext';
-import { Eye, EyeOff, ArrowRight } from 'lucide-react';
+import { ArrowRight, FlaskConical, Building2, Sparkles, Scissors, PartyPopper, Heart, Hand } from 'lucide-react';
+import { useAuth } from '../store/auth';
+import { useStore } from '../store/store';
+import { DEMO_USERS, HOME_PAGE, ROLE_LABEL } from '../config/venue';
+import { navigate } from '../lib/router';
+import { Avatar } from '../components/ui';
+
+const ROLE_BLURB = {
+  owner: 'Full visibility — dashboard, reports, payroll, activity logs, settings.',
+  manager: 'Operations — calendar, staff, roster, inventory, campaigns.',
+  reception: 'Front desk — walk-ins, leads, bookings, service desk, billing.',
+};
 
 export default function Login() {
   const { login } = useAuth();
-  const { setCurrentRole } = useRole();
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
+  const { state } = useStore();
+  const s = state.settings;
+  const roomCount = state.rooms.filter((r) => r.active).length;
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setLoading(true);
-    setTimeout(() => {
-      const result = login(email, password);
-      if (result.ok) {
-        const persona = demoUsers.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-        if (persona) setCurrentRole(persona.role);
-      } else {
-        setError(result.error || 'Unable to sign in.');
-        setLoading(false);
-      }
-    }, 450);
-  };
-
-  const fillDemo = (e: React.MouseEvent, demoEmail: string, demoPassword: string) => {
-    e.preventDefault();
-    setEmail(demoEmail);
-    setPassword(demoPassword);
-    setError('');
+  const enter = (id: string) => {
+    const u = DEMO_USERS.find((x) => x.id === id)!;
+    login(id);
+    navigate(HOME_PAGE[u.role]);
   };
 
   return (
-    <div className="min-h-screen relative flex items-center justify-center p-6 bg-forest-gradient overflow-hidden">
-      {/* Ambient glows */}
-      <div className="absolute -top-32 -left-24 w-[28rem] h-[28rem] rounded-full bg-brand/25 blur-3xl" />
-      <div className="absolute -bottom-32 -right-24 w-[30rem] h-[30rem] rounded-full bg-gold/10 blur-3xl" />
-      <div className="absolute inset-0 opacity-[0.05] flex items-center justify-center text-[40rem] leading-none select-none pointer-events-none">
-        🌿
-      </div>
+    <div className="min-h-screen bg-forest-gradient relative overflow-hidden">
+      <div className="absolute -top-40 -left-32 w-[34rem] h-[34rem] rounded-full bg-brand/25 blur-3xl" />
+      <div className="absolute -bottom-40 -right-32 w-[34rem] h-[34rem] rounded-full bg-gold/10 blur-3xl" />
 
-      <div className="relative w-full max-w-[400px] animate-fade-in">
-        {/* Brand */}
-        <div className="flex flex-col items-center text-center mb-7">
-          <span className="w-14 h-14 rounded-2xl bg-white/10 ring-1 ring-white/15 flex items-center justify-center text-3xl mb-4">
-            🌿
+      <div className="relative max-w-6xl mx-auto px-5 py-10 lg:py-16 grid lg:grid-cols-[1.05fr_1fr] gap-10 items-center">
+        {/* Story */}
+        <div className="text-white">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-300/15 ring-1 ring-amber-300/40 text-amber-200 px-3 py-1 text-[11px] font-bold uppercase tracking-wider">
+            <FlaskConical size={13} /> Demo preview · sample data
           </span>
-          <h1 className="font-display text-3xl font-semibold text-white tracking-tight">Oasis Spa</h1>
-          <p className="text-[11px] uppercase tracking-widest2 text-gold-light/80 mt-1.5">Management Suite</p>
-        </div>
+          <h1 className="font-display text-5xl lg:text-6xl font-semibold tracking-tight mt-5">{s.businessName}</h1>
+          <p className="text-gold-light/90 uppercase tracking-widest2 text-xs mt-2">{s.tagline} · {s.branch}</p>
+          <p className="text-white/70 text-[15px] leading-relaxed mt-6 max-w-lg">
+            One connected platform for the whole Oasis building — {roomCount} bookable rooms including two banquet halls, the couple suite,
+            spa rooms, hair studio, skin room, nail lounge and bridal suite. From the first lead to the final invoice and the owner’s reports.
+          </p>
 
-        {/* Card */}
-        <div className="bg-white rounded-2xl shadow-lift overflow-hidden">
-          <div className="h-1 bg-gold-sheen" />
-          <div className="p-7">
-            <h2 className="font-display text-xl font-semibold text-ink">Sign in</h2>
-            <p className="text-sm text-ink/55 mt-1">Welcome back, please enter your details.</p>
-
-            <form onSubmit={submit} className="mt-6 space-y-4">
-              <div>
-                <label className="field-label">Email address</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@oasisspa.com"
-                  className="field"
-                  autoComplete="username"
-                  required
-                />
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-7 max-w-lg">
+            {[
+              { i: <PartyPopper size={18} />, t: 'Banquets' },
+              { i: <Heart size={18} />, t: 'Couple suite' },
+              { i: <Sparkles size={18} />, t: 'Spa' },
+              { i: <Scissors size={18} />, t: 'Salon' },
+              { i: <Hand size={18} />, t: 'Nails' },
+              { i: <Building2 size={18} />, t: `${roomCount} rooms` },
+            ].map((x) => (
+              <div key={x.t} className="rounded-xl bg-white/[0.06] ring-1 ring-white/10 py-3 text-center">
+                <span className="text-gold-light inline-flex">{x.i}</span>
+                <p className="text-[10.5px] text-white/60 mt-1">{x.t}</p>
               </div>
+            ))}
+          </div>
 
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="field-label mb-0">Password</label>
-                  <button type="button" className="text-xs font-medium text-brand hover:text-brand-600">
-                    Forgot?
-                  </button>
-                </div>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="field pr-11"
-                    autoComplete="current-password"
-                    required
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword((s) => !s)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-ink/35 hover:text-ink/70"
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
-                  >
-                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                  </button>
-                </div>
-              </div>
-
-              {error && (
-                <div className="rounded-xl bg-rose-50 ring-1 ring-inset ring-rose-600/15 px-3.5 py-2.5 text-sm text-rose-700">
-                  {error}
-                </div>
-              )}
-
-              <button type="submit" disabled={loading} className="btn-primary w-full py-3">
-                {loading ? 'Signing in…' : 'Sign in'}
-                {!loading && <ArrowRight size={18} />}
-              </button>
-            </form>
-
-            {/* Demo accounts */}
-            <div className="mt-7">
-              <div className="flex items-center gap-3 text-[11px] font-semibold uppercase tracking-wider text-ink/35">
-                <span className="h-px flex-1 bg-black/[0.08]" />
-                Demo accounts
-                <span className="h-px flex-1 bg-black/[0.08]" />
-              </div>
-              <div className="grid grid-cols-2 gap-2.5 mt-4">
-                {demoUsers.map((u) => (
-                  <button
-                    key={u.role}
-                    onClick={(e) => fillDemo(e, u.email, u.password)}
-                    className="text-left rounded-xl border border-black/[0.08] bg-white px-3.5 py-2.5 hover:border-brand/40 hover:bg-sand/40 transition-colors"
-                  >
-                    <span className="block text-sm font-semibold text-ink">{u.role}</span>
-                    <span className="block text-[11px] text-ink/45 truncate">{u.email}</span>
-                  </button>
-                ))}
-              </div>
-              <p className="text-center text-[11px] text-ink/40 mt-3">
-                Password for all demo accounts: <span className="font-semibold text-ink/60">oasis123</span>
-              </p>
-            </div>
+          <div className="mt-7 rounded-2xl bg-white/[0.05] ring-1 ring-white/10 p-4 max-w-lg">
+            <p className="text-sm font-semibold text-white">This is a demonstration build</p>
+            <ul className="text-[13px] text-white/60 mt-2 space-y-1 list-disc pl-4">
+              <li>It follows the <b className="text-white/80">Oasis Demo Feature Checklist</b> (sections A–L) and its 7-step walkthrough.</li>
+              <li>All customers, staff, bookings and invoices are realistic <b className="text-white/80">sample data</b>.</li>
+              <li>Rooms, services, prices, roles, rules and layouts are <b className="text-white/80">entirely customisable</b>.</li>
+              <li>Biometric, Google Sheets, Justdial and WhatsApp appear as <b className="text-white/80">previews</b>, not live integrations.</li>
+            </ul>
           </div>
         </div>
 
-        <p className="text-center text-xs text-white/40 mt-6">© 2026 Oasis Spa · Bengaluru, India</p>
+        {/* Personas */}
+        <div className="bg-white rounded-3xl shadow-lift overflow-hidden">
+          <div className="h-1 bg-gold-sheen" />
+          <div className="p-6 lg:p-7">
+            <h2 className="font-display text-2xl font-semibold text-ink">Choose a demo login</h2>
+            <p className="text-sm text-ink/55 mt-1">No password needed. You can switch users at any time from the top-right menu — the activity log records who did what.</p>
+            <div className="mt-5 space-y-2.5">
+              {DEMO_USERS.map((u) => (
+                <button
+                  key={u.id}
+                  onClick={() => enter(u.id)}
+                  className="group w-full flex items-center gap-3.5 rounded-2xl border border-black/[0.08] px-4 py-3.5 text-left hover:border-brand/40 hover:bg-brand/[0.03] transition-colors"
+                >
+                  <Avatar name={u.name} size={42} />
+                  <span className="flex-1 min-w-0">
+                    <span className="flex items-center gap-2">
+                      <span className="text-[15px] font-semibold text-ink">{u.name}</span>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-brand bg-brand/10 rounded px-1.5 py-0.5">{ROLE_LABEL[u.role]}</span>
+                    </span>
+                    <span className="block text-xs text-ink/50 mt-0.5">{u.title} — {ROLE_BLURB[u.role]}</span>
+                  </span>
+                  <ArrowRight size={18} className="text-ink/25 group-hover:text-brand transition-colors" />
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-ink/40 mt-5">
+              Demo data is stored only in this browser and can be reset at any time. Role permissions shown here are sample settings.
+            </p>
+          </div>
+        </div>
       </div>
     </div>
   );
